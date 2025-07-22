@@ -1,0 +1,122 @@
+import asyncio
+import logging
+import os
+import random
+import re
+
+from aiogram import Bot, Dispatcher, types
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
+
+
+class GameStates(StatesGroup):
+    SELECTING_X = State()
+    WAITING_ANSWER = State()
+
+
+API_TOKEN = '8082631744:AAFSwWVjU1J1yi69g7QraEz6c5DpFHWR7S8'
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher()
+
+BOOKS_DIR = 'data/txt'
+
+
+def get_books_list():
+    return [f for f in os.listdir(BOOKS_DIR) if f.endswith('.txt')]
+
+
+def read_book(book_path):
+    with open(os.path.join(BOOKS_DIR, book_path), 'r', encoding='utf-8') as f:
+        content = f.read().splitlines()
+
+    # Пропускаем первую строку с количеством предложений
+    sentences = content[1:]
+
+    # Объединяем все строки в один большой текст
+    text = ' '.join(sentences)
+
+    # Используем регулярное выражение для разделения текста на предложения
+    # Знаки препинания: . ! ? С учетом возможных пробелов после них
+    pattern = r'(?<=[.!?])\s+'
+    sentences = re.split(pattern, text)
+
+    # Удаляем пустые строки и лишние пробелы
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    return sentences
+
+@dp.message(Command("start"))
+async def start_game(message: types.Message, state: FSMContext):
+    await message.answer("Выберите количество предложений:")
+    await state.set_state(GameStates.SELECTING_X)
+
+
+@dp.message(GameStates.SELECTING_X)
+async def select_x(message: types.Message, state: FSMContext):
+    x = int(message.text)
+    if x <= 0:
+        await message.answer("Количество должно быть больше 0!")
+        return
+
+    books = get_books_list()
+    if not books:
+        await message.answer("Нет доступных книг!")
+        return
+
+    book_name = random.choice(books)
+    sentences = read_book(book_name)
+    total_sentences = len(sentences)
+
+    if x > total_sentences:
+        await message.answer(f"В книге {book_name} только {total_sentences} предложений. Выберите меньшее число.")
+        return
+
+    start_index = random.randint(0, len(sentences) - x)
+    fragment = '\n'.join(sentences[start_index:start_index + x])
+
+    await state.update_data(book_name=book_name, x=x, fragment=fragment)
+    await message.answer(f"Угадайте книгу по {x} предложениям:\n\n{fragment}")
+    await state.set_state(GameStates.WAITING_ANSWER)
+
+
+@dp.message(GameStates.WAITING_ANSWER)
+async def check_answer(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    correct_book = data['book_name']
+    user_answer = message.text.strip()
+
+    if user_answer.lower() == correct_book.replace('.txt', '').lower():
+        await message.answer("Правильно! Теперь следующая загадка.")
+        await state.clear()
+        await start_game(message, state)
+    else:
+        await message.answer(f"Не угадали. Правильный ответ: {correct_book.replace('.txt', '')}")
+        await start_game(message, state)
+
+
+@dp.message(Command("stop"))
+async def stop_game(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Игра остановлена. Нажмите /start для новой игры.", reply_markup=types.ReplyKeyboardRemove())
+
+
+async def main() -> None:
+    global bot
+    bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    print("Ну че народ погнали нах")
+    try:
+        asyncio.run(main())
+        logging.info("Бот запущен.")
+    except Exception as e:
+        logging.error("Ошибка при запуске бота: %s", e)
+        logging.exception(f"Произошла ошибка: {e}")
+        print(f"Произошла ошибка: {e}")
+
