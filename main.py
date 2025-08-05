@@ -3,6 +3,8 @@ import logging
 import os
 import random
 import re
+import tracemalloc
+from functools import lru_cache
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
@@ -18,37 +20,45 @@ class GameStates(StatesGroup):
     WAITING_ANSWER = State()
 
 
-API_TOKEN = '8082631744:AAFSwWVjU1J1yi69g7QraEz6c5DpFHWR7S8'
+API_TOKEN = ''
 bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher()
 
 BOOKS_DIR = 'data/txt'
 
+tracemalloc.start()
+
+MAX_CACHED_BOOKS = 15
+
 
 def get_books_list():
     return [f for f in os.listdir(BOOKS_DIR) if f.endswith('.txt')]
 
 
+@lru_cache(maxsize=MAX_CACHED_BOOKS)
 def read_book(book_path):
-    with open(os.path.join(BOOKS_DIR, book_path), 'r', encoding='utf-8') as f:
+    file_path = os.path.join(BOOKS_DIR, book_path)
+
+    with open(file_path, 'r', encoding='utf-8') as f:
         content = f.read().splitlines()
 
     # Пропускаем первую строку с количеством предложений
     sentences = content[1:]
 
-    # Объединяем все строки в один большой текст
+    # Объединяем все строки в один текст
     text = ' '.join(sentences)
 
-    # Используем регулярное выражение для разделения текста на предложения
-    # Знаки препинания: . ! ? С учетом возможных пробелов после них
+    # Разделяем на предложения по [.!?]
     pattern = r'(?<=[.!?])\s+'
     sentences = re.split(pattern, text)
 
-    # Удаляем пустые строки и лишние пробелы
+    # Очищаем
     sentences = [s.strip() for s in sentences if s.strip()]
 
+    print(f"Загружаю и кэширую: {book_path}")
     return sentences
+
 
 @dp.message(Command("start"))
 async def start_game(message: types.Message, state: FSMContext):
@@ -70,6 +80,9 @@ async def select_x(message: types.Message, state: FSMContext):
 
     book_name = random.choice(books)
     sentences = read_book(book_name)
+
+    monitor_alloc()
+
     total_sentences = len(sentences)
 
     if x > total_sentences:
@@ -105,6 +118,13 @@ async def stop_game(message: types.Message, state: FSMContext):
     await message.answer("Игра остановлена. Нажмите /start для новой игры.", reply_markup=types.ReplyKeyboardRemove())
 
 
+def monitor_alloc():
+    current, peak = tracemalloc.get_traced_memory()
+    print(f"Текущее потребление памяти: {current / 1024 / 1024:.2f} МБ")
+    print(f"Пиковое потребление памяти: {peak / 1024 / 1024:.2f} МБ")
+    print(f"Кэш: {read_book.cache_info()}")
+
+
 async def main() -> None:
     global bot
     bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -119,4 +139,5 @@ if __name__ == "__main__":
         logging.error("Ошибка при запуске бота: %s", e)
         logging.exception(f"Произошла ошибка: {e}")
         print(f"Произошла ошибка: {e}")
+
 
